@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Widevine Robustness Player</title>
+  <script src="https://cdn.jsdelivr.net/npm/shaka-player@4.3.0/dist/shaka-player.compiled.js"></script>
+  <style>
+    body { font-family: sans-serif; max-width: 900px; margin: 20px auto; padding: 0 10px; }
+    label { display: block; margin-top: 10px; font-weight: bold; }
+    input, select { width: 100%; padding: 6px; box-sizing: border-box; }
+    button { margin-top: 15px; padding: 8px 16px; }
+    video { width: 100%; margin-top: 20px; background: #000; }
+    #log { margin-top: 10px; white-space: pre-wrap; font-family: monospace; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <h1>Widevine Robustness Check Player</h1>
+
+  <label for="manifestUrl">MANIFEST_URL</label>
+  <input id="manifestUrl" type="url" placeholder="https://example.com/manifest.mpd">
+
+  <label for="licenseUrl">LICENSE_URL</label>
+  <input id="licenseUrl" type="url" placeholder="https://example.com/license">
+
+  <label for="keySystem">KEY_SYSTEM</label>
+  <input id="keySystem" type="text" value="com.widevine.alpha" readonly>
+
+  <label for="videoRobustness">Video Robustness</label>
+  <select id="videoRobustness">
+    <option value="">(none)</option>
+    <option value="SW_SECURE_CRYPTO">SW_SECURE_CRYPTO (L3)</option>
+    <option value="SW_SECURE_DECODE">SW_SECURE_DECODE (L3)</option>
+    <option value="HW_SECURE_CRYPTO">HW_SECURE_CRYPTO (L2)</option>
+    <option value="HW_SECURE_DECODE">HW_SECURE_DECODE (L1)</option>
+    <option value="HW_SECURE_ALL">HW_SECURE_ALL (L1)</option>
+  </select>
+
+  <label for="audioRobustness">Audio Robustness</label>
+  <select id="audioRobustness">
+    <option value="">(none)</option>
+    <option value="SW_SECURE_CRYPTO" selected>SW_SECURE_CRYPTO</option>
+    <option value="SW_SECURE_DECODE">SW_SECURE_DECODE</option>
+    <option value="HW_SECURE_CRYPTO">HW_SECURE_CRYPTO</option>
+    <option value="HW_SECURE_DECODE">HW_SECURE_DECODE</option>
+    <option value="HW_SECURE_ALL">HW_SECURE_ALL</option>
+  </select>
+
+  <button id="loadBtn">Load</button>
+
+  <video id="video" controls autoplay></video>
+  <div id="log"></div>
+
+  <script>
+    const KEY_SYSTEM = 'com.widevine.alpha';
+    const video = document.getElementById('video');
+    const logEl = document.getElementById('log');
+    let player;
+
+    function log(msg) {
+      logEl.textContent += msg + '\n';
+    }
+
+    const params = new URLSearchParams(location.search);
+    for (const [param, id] of [['manifest', 'manifestUrl'], ['license', 'licenseUrl'],
+                               ['videoRobustness', 'videoRobustness'], ['audioRobustness', 'audioRobustness']]) {
+      if (params.has(param)) document.getElementById(id).value = params.get(param);
+    }
+
+    async function load() {
+      logEl.textContent = '';
+      const manifestUrl = document.getElementById('manifestUrl').value.trim();
+      const licenseUrl = document.getElementById('licenseUrl').value.trim();
+      const videoRobustness = document.getElementById('videoRobustness').value;
+      const audioRobustness = document.getElementById('audioRobustness').value;
+
+      if (!manifestUrl) {
+        log('MANIFEST_URL is required');
+        return;
+      }
+
+      if (player) await player.destroy();
+      player = new shaka.Player(video);
+      player.addEventListener('error', e => log('Error: ' + JSON.stringify(e.detail)));
+
+      player.configure({
+        drm: {
+          servers: licenseUrl ? { [KEY_SYSTEM]: licenseUrl } : {},
+          advanced: {
+            [KEY_SYSTEM]: { videoRobustness, audioRobustness }
+          }
+        }
+      });
+
+      log(`Key system: ${KEY_SYSTEM}`);
+      log(`Video robustness: ${videoRobustness || '(none)'}`);
+      log(`Audio robustness: ${audioRobustness || '(none)'}`);
+
+      try {
+        await player.load(manifestUrl);
+        log('Loaded successfully');
+      } catch (e) {
+        log('Load failed: code ' + e.code + ' ' + JSON.stringify(e.data));
+      }
+    }
+
+    shaka.polyfill.installAll();
+    if (!shaka.Player.isBrowserSupported()) {
+      log('Browser not supported');
+    }
+    document.getElementById('loadBtn').addEventListener('click', load);
+  </script>
+</body>
+</html>
