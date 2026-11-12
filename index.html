@@ -3,112 +3,346 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Widevine Robustness Player</title>
+  <title>DRM Robustness Player</title>
   <script src="https://cdn.jsdelivr.net/npm/shaka-player@4.3.0/dist/shaka-player.compiled.js"></script>
+
   <style>
-    body { font-family: sans-serif; max-width: 900px; margin: 20px auto; padding: 0 10px; }
-    label { display: block; margin-top: 10px; font-weight: bold; }
-    input, select { width: 100%; padding: 6px; box-sizing: border-box; }
-    button { margin-top: 15px; padding: 8px 16px; }
-    video { width: 100%; margin-top: 20px; background: #000; }
-    #log { margin-top: 10px; white-space: pre-wrap; font-family: monospace; font-size: 12px; }
+    body {
+      font-family: sans-serif;
+      max-width: 900px;
+      margin: 20px auto;
+      padding: 0 10px;
+    }
+
+    label {
+      display: block;
+      margin-top: 10px;
+      font-weight: bold;
+    }
+
+    input, select {
+      width: 100%;
+      padding: 6px;
+      box-sizing: border-box;
+    }
+
+    .checkbox-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 15px;
+    }
+
+    .checkbox-row input { width: auto; }
+    .checkbox-row label { margin: 0; }
+
+    button {
+      margin-top: 15px;
+      padding: 8px 16px;
+      margin-right: 8px;
+    }
+
+    video {
+      width: 100%;
+      margin-top: 20px;
+      background: #000;
+    }
+
+    #log {
+      margin-top: 10px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      font-family: monospace;
+      font-size: 12px;
+    }
   </style>
 </head>
+
 <body>
-  <h1>Widevine Robustness Check Player</h1>
+  <h1>DRM Robustness Check Player</h1>
 
   <label for="manifestUrl">MANIFEST_URL</label>
-  <input id="manifestUrl" type="url" placeholder="https://example.com/manifest.mpd">
+  <input id="manifestUrl" type="url"
+         placeholder="https://example.com/manifest.mpd">
 
   <label for="licenseUrl">LICENSE_URL</label>
-  <input id="licenseUrl" type="url" placeholder="https://example.com/license">
+  <input id="licenseUrl" type="url"
+         placeholder="https://example.com/widevine/license">
 
   <label for="keySystem">KEY_SYSTEM</label>
-  <input id="keySystem" type="text" value="com.widevine.alpha" readonly>
+  <select id="keySystem">
+    <option value="com.widevine.alpha">com.widevine.alpha</option>
+    <option value="com.microsoft.playready">com.microsoft.playready</option>
+  </select>
 
   <label for="videoRobustness">Video Robustness</label>
-  <select id="videoRobustness">
-    <option value="">(none)</option>
-    <option value="SW_SECURE_CRYPTO">SW_SECURE_CRYPTO (L3)</option>
-    <option value="SW_SECURE_DECODE">SW_SECURE_DECODE (L3)</option>
-    <option value="HW_SECURE_CRYPTO">HW_SECURE_CRYPTO (L2)</option>
-    <option value="HW_SECURE_DECODE">HW_SECURE_DECODE (L1)</option>
-    <option value="HW_SECURE_ALL">HW_SECURE_ALL (L1)</option>
-  </select>
+  <select id="videoRobustness"></select>
 
   <label for="audioRobustness">Audio Robustness</label>
-  <select id="audioRobustness">
-    <option value="">(none)</option>
-    <option value="SW_SECURE_CRYPTO" selected>SW_SECURE_CRYPTO</option>
-    <option value="SW_SECURE_DECODE">SW_SECURE_DECODE</option>
-    <option value="HW_SECURE_CRYPTO">HW_SECURE_CRYPTO</option>
-    <option value="HW_SECURE_DECODE">HW_SECURE_DECODE</option>
-    <option value="HW_SECURE_ALL">HW_SECURE_ALL</option>
-  </select>
+  <select id="audioRobustness"></select>
 
-  <button id="loadBtn">Load</button>
+  <div class="checkbox-row">
+    <input id="autoload" type="checkbox">
+    <label for="autoload">Autoload and autoplay</label>
+  </div>
 
-  <video id="video" controls autoplay></video>
-  <div id="log"></div>
+  <button id="loadBtn" type="button">Load</button>
+  <button id="shareBtn" type="button">Share</button>
+
+  <div id="shareArea" hidden>
+    <label for="shareUrl">Shareable URL</label>
+    <input id="shareUrl" type="text" readonly>
+  </div>
+
+  <video id="video" controls playsinline></video>
+  <div id="log" role="status"></div>
 
   <script>
-    const KEY_SYSTEM = 'com.widevine.alpha';
-    const video = document.getElementById('video');
-    const logEl = document.getElementById('log');
-    let player;
+    document.addEventListener('DOMContentLoaded', () => {
+      const WIDEVINE = 'com.widevine.alpha';
+      const PLAYREADY = 'com.microsoft.playready';
 
-    function log(msg) {
-      logEl.textContent += msg + '\n';
-    }
+      const manifestInput = document.getElementById('manifestUrl');
+      const licenseInput = document.getElementById('licenseUrl');
+      const keySystemSelect = document.getElementById('keySystem');
+      const videoSelect = document.getElementById('videoRobustness');
+      const audioSelect = document.getElementById('audioRobustness');
+      const autoloadInput = document.getElementById('autoload');
+      const loadButton = document.getElementById('loadBtn');
+      const shareButton = document.getElementById('shareBtn');
+      const shareArea = document.getElementById('shareArea');
+      const shareInput = document.getElementById('shareUrl');
+      const video = document.getElementById('video');
+      const logEl = document.getElementById('log');
 
-    const params = new URLSearchParams(location.search);
-    for (const [param, id] of [['manifest', 'manifestUrl'], ['license', 'licenseUrl'],
-                               ['videoRobustness', 'videoRobustness'], ['audioRobustness', 'audioRobustness']]) {
-      if (params.has(param)) document.getElementById(id).value = params.get(param);
-    }
+      let player;
+      let loading = false;
+      let supported = false;
 
-    async function load() {
-      logEl.textContent = '';
-      const manifestUrl = document.getElementById('manifestUrl').value.trim();
-      const licenseUrl = document.getElementById('licenseUrl').value.trim();
-      const videoRobustness = document.getElementById('videoRobustness').value;
-      const audioRobustness = document.getElementById('audioRobustness').value;
+      const robustnessOptions = {
+        [WIDEVINE]: [
+          ['', '(none)'],
+          ['SW_SECURE_CRYPTO', 'SW_SECURE_CRYPTO'],
+          ['SW_SECURE_DECODE', 'SW_SECURE_DECODE'],
+          ['HW_SECURE_CRYPTO', 'HW_SECURE_CRYPTO'],
+          ['HW_SECURE_DECODE', 'HW_SECURE_DECODE'],
+          ['HW_SECURE_ALL', 'HW_SECURE_ALL']
+        ],
+        [PLAYREADY]: [
+          ['', '(none)'],
+          ['2000', '2000 (SL2000 — implementation-dependent)'],
+          ['3000', '3000 (SL3000 — implementation-dependent)']
+        ]
+      };
 
-      if (!manifestUrl) {
-        log('MANIFEST_URL is required');
-        return;
+      function log(message) {
+        logEl.textContent += message + '\n';
       }
 
-      if (player) await player.destroy();
-      player = new shaka.Player(video);
-      player.addEventListener('error', e => log('Error: ' + JSON.stringify(e.detail)));
+      function setOptions(select, options, defaultValue) {
+        select.replaceChildren();
 
-      player.configure({
-        drm: {
-          servers: licenseUrl ? { [KEY_SYSTEM]: licenseUrl } : {},
-          advanced: {
-            [KEY_SYSTEM]: { videoRobustness, audioRobustness }
+        for (const [value, label] of options) {
+          select.add(new Option(label, value));
+        }
+
+        select.value = defaultValue;
+      }
+
+      function updateRobustnessMenus() {
+        const keySystem = keySystemSelect.value;
+        const options = robustnessOptions[keySystem];
+
+        // Reset robustness to appropriate defaults when DRM changes.
+        setOptions(videoSelect, options, '');
+        setOptions(
+          audioSelect,
+          options,
+          keySystem === WIDEVINE ? 'SW_SECURE_CRYPTO' : ''
+        );
+      }
+
+      function selectValidValue(select, value) {
+        if (Array.from(select.options).some(option => option.value === value)) {
+          select.value = value;
+        }
+      }
+
+      function populateFormFromUrl() {
+        const params = new URLSearchParams(window.location.search);
+
+        // Restore DRM first so the correct robustness menus exist.
+        if (params.has('keySystem')) {
+          selectValidValue(keySystemSelect, params.get('keySystem'));
+        }
+
+        updateRobustnessMenus();
+
+        if (params.has('manifest')) {
+          manifestInput.value = params.get('manifest');
+        }
+
+        if (params.has('license')) {
+          licenseInput.value = params.get('license');
+        }
+
+        if (params.has('videoRobustness')) {
+          selectValidValue(videoSelect, params.get('videoRobustness'));
+        }
+
+        if (params.has('audioRobustness')) {
+          selectValidValue(audioSelect, params.get('audioRobustness'));
+        }
+
+        autoloadInput.checked = params.get('autoload') === 'true';
+      }
+
+      function createShareUrl() {
+        const url = new URL(window.location.href);
+
+        // Include empty values too, so "(none)" overrides default settings.
+        url.searchParams.set('manifest', manifestInput.value);
+        url.searchParams.set('license', licenseInput.value);
+        url.searchParams.set('keySystem', keySystemSelect.value);
+        url.searchParams.set('videoRobustness', videoSelect.value);
+        url.searchParams.set('audioRobustness', audioSelect.value);
+        url.searchParams.set('autoload', String(autoloadInput.checked));
+
+        return url.toString();
+      }
+
+      async function share() {
+        const url = createShareUrl();
+
+        // Always expose the URL for manual copying.
+        shareArea.hidden = false;
+        shareInput.value = url;
+
+        try {
+          if (!navigator.clipboard?.writeText) {
+            throw new Error('Clipboard unavailable');
           }
+
+          await navigator.clipboard.writeText(url);
+          log('Share URL copied to clipboard.');
+        } catch {
+          shareInput.focus();
+          shareInput.select();
+          log('Copy the URL from the Shareable URL field.');
+        }
+      }
+
+      async function load() {
+        if (loading) return;
+
+        logEl.textContent = '';
+
+        if (!supported) {
+          log('Browser not supported or Shaka Player unavailable.');
+          return;
+        }
+
+        const manifestUrl = manifestInput.value.trim();
+        const licenseUrl = licenseInput.value.trim();
+        const keySystem = keySystemSelect.value;
+        const videoRobustness = videoSelect.value;
+        const audioRobustness = audioSelect.value;
+
+        if (!manifestUrl) {
+          log('MANIFEST_URL is required.');
+          return;
+        }
+
+        loading = true;
+        loadButton.disabled = true;
+
+        try {
+          if (player) {
+            await player.destroy();
+            player = null;
+          }
+
+          player = new shaka.Player(video);
+
+          player.addEventListener('error', event => {
+            log('Player error: ' + JSON.stringify(event.detail));
+          });
+
+          player.configure({
+            drm: {
+              servers: licenseUrl ? { [keySystem]: licenseUrl } : {},
+              preferredKeySystems: [keySystem],
+              advanced: {
+                [keySystem]: {
+                  videoRobustness,
+                  audioRobustness
+                }
+              }
+            }
+          });
+
+          log(`Requested key system: ${keySystem}`);
+          log(`Video robustness: ${videoRobustness || '(none)'}`);
+          log(`Audio robustness: ${audioRobustness || '(none)'}`);
+
+          await player.load(manifestUrl);
+          log('Loaded successfully.');
+
+          try {
+            await video.play();
+            log('Playback started.');
+          } catch (error) {
+            if (error.name === 'NotAllowedError') {
+              log('Autoplay blocked. Use the video controls to start playback.');
+            } else {
+              log('Playback failed: ' + error.message);
+            }
+          }
+        } catch (error) {
+          log(
+            'Load failed: ' +
+            (error.code ?? error.message) +
+            ' ' +
+            JSON.stringify(error.data ?? [])
+          );
+        } finally {
+          loading = false;
+          loadButton.disabled = false;
+        }
+      }
+
+      keySystemSelect.addEventListener('change', () => {
+        updateRobustnessMenus();
+
+        if (keySystemSelect.value === WIDEVINE) {
+          licenseInput.value =
+            licenseInput.value.replace('playready', 'widevine');
+        } else if (keySystemSelect.value === PLAYREADY) {
+          licenseInput.value =
+            licenseInput.value.replace('widevine', 'playready');
         }
       });
 
-      log(`Key system: ${KEY_SYSTEM}`);
-      log(`Video robustness: ${videoRobustness || '(none)'}`);
-      log(`Audio robustness: ${audioRobustness || '(none)'}`);
+      loadButton.addEventListener('click', load);
+      shareButton.addEventListener('click', share);
 
-      try {
-        await player.load(manifestUrl);
-        log('Loaded successfully');
-      } catch (e) {
-        log('Load failed: code ' + e.code + ' ' + JSON.stringify(e.data));
+      populateFormFromUrl();
+
+      if (window.shaka) {
+        shaka.polyfill.installAll();
+        supported = shaka.Player.isBrowserSupported();
       }
-    }
 
-    shaka.polyfill.installAll();
-    if (!shaka.Player.isBrowserSupported()) {
-      log('Browser not supported');
-    }
-    document.getElementById('loadBtn').addEventListener('click', load);
+      if (!supported) {
+        log('Browser not supported or Shaka Player unavailable.');
+        loadButton.disabled = true;
+        return;
+      }
+
+      if (autoloadInput.checked) {
+        load();
+      }
+    });
   </script>
 </body>
 </html>
