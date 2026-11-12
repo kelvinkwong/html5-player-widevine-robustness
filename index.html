@@ -7,53 +7,120 @@
   <script src="https://cdn.jsdelivr.net/npm/shaka-player@4.3.0/dist/shaka-player.compiled.js"></script>
 
   <style>
+    * { box-sizing: border-box; }
+
+    html, body {
+      height: 100%;
+      margin: 0;
+    }
+
     body {
+      height: 100dvh;
+      padding: 12px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      overflow: hidden;
       font-family: sans-serif;
-      max-width: 900px;
-      margin: 20px auto;
-      padding: 0 10px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 18px;
+      flex: none;
+    }
+
+    .layout {
+      flex: 1;
+      min-height: 0;
+      display: grid;
+      grid-template-columns: 380px 1fr;
+      gap: 16px;
+    }
+
+    /* Left column: form */
+    .controls {
+      min-height: 0;
+      overflow-y: auto;      /* only kicks in on very short viewports */
+      padding-right: 4px;
     }
 
     label {
       display: block;
-      margin-top: 10px;
+      margin-top: 8px;
+      margin-bottom: 2px;
+      font-size: 12px;
       font-weight: bold;
     }
 
+    .controls > label:first-child { margin-top: 0; }
+
     input, select {
       width: 100%;
-      padding: 6px;
-      box-sizing: border-box;
+      padding: 5px 6px;
+      font-size: 13px;
     }
 
     .checkbox-row {
       display: flex;
       align-items: center;
       gap: 8px;
-      margin-top: 15px;
+      margin-top: 12px;
     }
 
     .checkbox-row input { width: auto; }
     .checkbox-row label { margin: 0; }
 
+    .actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
     button {
-      margin-top: 15px;
-      padding: 8px 16px;
-      margin-right: 8px;
+      padding: 7px 16px;
+    }
+
+    /* Right column: video + log */
+    .player {
+      min-height: 0;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .video-wrap {
+      flex: 1;
+      min-height: 0;
+      background: #000;
     }
 
     video {
+      display: block;
       width: 100%;
-      margin-top: 20px;
+      height: 100%;
+      object-fit: contain;
       background: #000;
     }
 
     #log {
-      margin-top: 10px;
+      flex: none;
+      height: 110px;
+      overflow: auto;
+      padding: 6px;
+      border: 1px solid #ccc;
       white-space: pre-wrap;
       overflow-wrap: anywhere;
       font-family: monospace;
       font-size: 12px;
+    }
+
+    /* Narrow screens: stack and allow normal scrolling */
+    @media (max-width: 800px) {
+      body { height: auto; overflow: auto; }
+      .layout { grid-template-columns: 1fr; }
+      .video-wrap { aspect-ratio: 16 / 9; flex: none; }
     }
   </style>
 </head>
@@ -61,41 +128,51 @@
 <body>
   <h1>DRM Robustness Check Player</h1>
 
-  <label for="manifestUrl">MANIFEST_URL</label>
-  <input id="manifestUrl" type="url"
-         placeholder="https://example.com/manifest.mpd">
+  <div class="layout">
+    <section class="controls">
+      <label for="manifestUrl">MANIFEST_URL</label>
+      <input id="manifestUrl" type="url"
+             placeholder="https://example.com/manifest.mpd">
 
-  <label for="licenseUrl">LICENSE_URL</label>
-  <input id="licenseUrl" type="url"
-         placeholder="https://example.com/widevine/license">
+      <label for="licenseUrl">LICENSE_URL</label>
+      <input id="licenseUrl" type="url"
+             placeholder="https://example.com/widevine/license">
 
-  <label for="keySystem">KEY_SYSTEM</label>
-  <select id="keySystem">
-    <option value="com.widevine.alpha">com.widevine.alpha</option>
-    <option value="com.microsoft.playready">com.microsoft.playready</option>
-  </select>
+      <label for="keySystem">KEY_SYSTEM</label>
+      <select id="keySystem">
+        <option value="com.widevine.alpha">com.widevine.alpha</option>
+        <option value="com.microsoft.playready">com.microsoft.playready</option>
+      </select>
 
-  <label for="videoRobustness">Video Robustness</label>
-  <select id="videoRobustness"></select>
+      <label for="videoRobustness">Video Robustness</label>
+      <select id="videoRobustness"></select>
 
-  <label for="audioRobustness">Audio Robustness</label>
-  <select id="audioRobustness"></select>
+      <label for="audioRobustness">Audio Robustness</label>
+      <select id="audioRobustness"></select>
 
-  <div class="checkbox-row">
-    <input id="autoload" type="checkbox">
-    <label for="autoload">Autoload and autoplay</label>
+      <div class="checkbox-row">
+        <input id="autoload" type="checkbox">
+        <label for="autoload">Autoload and autoplay when shared</label>
+      </div>
+
+      <div class="actions">
+        <button id="loadBtn" type="button">Load</button>
+        <button id="shareBtn" type="button">Share</button>
+      </div>
+
+      <div id="shareArea" hidden>
+        <label for="shareUrl">Shareable URL</label>
+        <input id="shareUrl" type="text" readonly>
+      </div>
+    </section>
+
+    <section class="player">
+      <div class="video-wrap">
+        <video id="video" controls playsinline></video>
+      </div>
+      <div id="log" role="status"></div>
+    </section>
   </div>
-
-  <button id="loadBtn" type="button">Load</button>
-  <button id="shareBtn" type="button">Share</button>
-
-  <div id="shareArea" hidden>
-    <label for="shareUrl">Shareable URL</label>
-    <input id="shareUrl" type="text" readonly>
-  </div>
-
-  <video id="video" controls playsinline></video>
-  <div id="log" role="status"></div>
 
   <script>
     document.addEventListener('DOMContentLoaded', () => {
@@ -137,6 +214,7 @@
 
       function log(message) {
         logEl.textContent += message + '\n';
+        logEl.scrollTop = logEl.scrollHeight;
       }
 
       function setOptions(select, options, defaultValue) {
