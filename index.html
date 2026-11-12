@@ -15,6 +15,7 @@
     }
 
     body {
+      height: 100vh;
       height: 100dvh;
       padding: 12px 16px;
       display: flex;
@@ -35,14 +36,15 @@
       flex: 1;
       min-height: 0;
       display: grid;
-      grid-template-columns: 380px 1fr;
+      grid-template-columns: 380px minmax(0, 1fr);
       gap: 16px;
     }
 
     /* Left column: form */
     .controls {
       min-height: 0;
-      overflow-y: auto;      /* only kicks in on very short viewports */
+      min-width: 0;
+      overflow-y: auto;
       padding-right: 4px;
     }
 
@@ -56,10 +58,17 @@
 
     .controls > label:first-child { margin-top: 0; }
 
-    input, select {
+    input, select, textarea {
       width: 100%;
       padding: 5px 6px;
       font-size: 13px;
+    }
+
+    textarea {
+      display: block;
+      height: 54px;
+      resize: none;
+      font-family: monospace;
     }
 
     .checkbox-row {
@@ -74,13 +83,17 @@
 
     .actions {
       display: flex;
+      flex-wrap: wrap;
       gap: 8px;
       margin-top: 12px;
     }
 
     button {
-      padding: 7px 16px;
+      padding: 7px 12px;
+      cursor: pointer;
     }
+
+    button:disabled { cursor: default; }
 
     /* Right column: video + log */
     .player {
@@ -151,6 +164,16 @@
       <label for="audioRobustness">Audio Robustness</label>
       <select id="audioRobustness"></select>
 
+      <label for="drmHeaders">drm headers</label>
+      <textarea id="drmHeaders"
+                spellcheck="false"
+                placeholder='{"X-Test-Client": "drm-check"}'></textarea>
+
+      <label for="mpdHeaders">mpd headers</label>
+      <textarea id="mpdHeaders"
+                spellcheck="false"
+                placeholder='{"X-Test-Client": "manifest-check"}'></textarea>
+
       <div class="checkbox-row">
         <input id="autoload" type="checkbox">
         <label for="autoload">Autoload and autoplay when shared</label>
@@ -185,6 +208,8 @@
       const keySystemSelect = document.getElementById('keySystem');
       const videoSelect = document.getElementById('videoRobustness');
       const audioSelect = document.getElementById('audioRobustness');
+      const drmHeadersInput = document.getElementById('drmHeaders');
+      const mpdHeadersInput = document.getElementById('mpdHeaders');
       const autoloadInput = document.getElementById('autoload');
       const loadButton = document.getElementById('loadBtn');
       const shareButton = document.getElementById('shareBtn');
@@ -232,7 +257,6 @@
         const keySystem = keySystemSelect.value;
         const options = robustnessOptions[keySystem];
 
-        // Reset robustness to appropriate defaults when DRM changes.
         setOptions(videoSelect, options, '');
         setOptions(
           audioSelect,
@@ -257,12 +281,17 @@
 
         updateRobustnessMenus();
 
-        if (params.has('manifest')) {
-          manifestInput.value = params.get('manifest');
-        }
+        const fieldMappings = [
+          ['manifest', manifestInput],
+          ['license', licenseInput],
+          ['drmHeaders', drmHeadersInput],
+          ['mpdHeaders', mpdHeadersInput]
+        ];
 
-        if (params.has('license')) {
-          licenseInput.value = params.get('license');
+        for (const [param, input] of fieldMappings) {
+          if (params.has(param)) {
+            input.value = params.get(param);
+          }
         }
 
         if (params.has('videoRobustness')) {
@@ -279,23 +308,30 @@
       function createShareUrl() {
         const url = new URL(window.location.href);
 
-        // Include empty values too, so "(none)" overrides default settings.
+        // Include empty values so shared settings override defaults.
         url.searchParams.set('manifest', manifestInput.value);
         url.searchParams.set('license', licenseInput.value);
         url.searchParams.set('keySystem', keySystemSelect.value);
         url.searchParams.set('videoRobustness', videoSelect.value);
         url.searchParams.set('audioRobustness', audioSelect.value);
+        url.searchParams.set('drmHeaders', drmHeadersInput.value);
+        url.searchParams.set('mpdHeaders', mpdHeadersInput.value);
         url.searchParams.set('autoload', String(autoloadInput.checked));
 
         return url.toString();
       }
 
-      async function share() {
+      function showShareUrl() {
         const url = createShareUrl();
 
-        // Always expose the URL for manual copying.
         shareArea.hidden = false;
         shareInput.value = url;
+
+        return url;
+      }
+
+      async function copyShareUrl() {
+        const url = showShareUrl();
 
         try {
           if (!navigator.clipboard?.writeText) {
@@ -307,7 +343,82 @@
         } catch {
           shareInput.focus();
           shareInput.select();
-          log('Copy the URL from the Shareable URL field.');
+          log('Clipboard unavailable. Copy the selected Shareable URL manually.');
+        }
+      }
+
+      function parseHeaders(input, label) {
+        input.setCustomValidity('');
+
+        const text = input.value.trim();
+
+        if (!text) {
+          return Object.create(null);
+        }
+
+        let parsed;
+
+        try {
+          parsed = JSON.parse(text);
+        } catch {
+          throw new Error(label + ' must contain valid JSON.');
+        }
+
+        if (
+          parsed === null ||
+          typeof parsed !== 'object' ||
+          Array.isArray(parsed)
+        ) {
+          throw new Error(
+            label + ' must be a JSON object of header names and string values.'
+          );
+        }
+
+        const headers = Object.create(null);
+
+        for (const [name, value] of Object.entries(parsed)) {
+          // HTTP header names must be tokens; disallow newline injection.
+          if (!/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(name)) {
+            throw new Error(label + ' contains an invalid header name.');
+          }
+
+          if (typeof value !== 'string' || /[\r\n\0]/.test(value)) {
+            throw new Error(
+              label + ' requires string values without newlines or null characters.'
+            );
+          }
+
+          headers[name] = value;
+        }
+
+        return headers;
+      }
+
+      function readHeaderInput(input, label) {
+        try {
+          return parseHeaders(input, label);
+        } catch (error) {
+          input.setCustomValidity(error.message);
+          input.reportValidity();
+          throw error;
+        }
+      }
+
+      function applyHeaders(request, headers) {
+        // Replace an existing header case-insensitively to avoid duplicates.
+        for (const [name, value] of Object.entries(headers)) {
+          for (const existingName of Object.keys(request.headers)) {
+            if (existingName.toLowerCase() === name.toLowerCase()) {
+              delete request.headers[existingName];
+            }
+          }
+
+          Object.defineProperty(request.headers, name, {
+            value,
+            enumerable: true,
+            configurable: true,
+            writable: true
+          });
         }
       }
 
@@ -332,6 +443,18 @@
           return;
         }
 
+        let drmHeaders;
+        let mpdHeaders;
+
+        // Validate before destroying the current player.
+        try {
+          drmHeaders = readHeaderInput(drmHeadersInput, 'drm headers');
+          mpdHeaders = readHeaderInput(mpdHeadersInput, 'mpd headers');
+        } catch (error) {
+          log(error.message);
+          return;
+        }
+
         loading = true;
         loadButton.disabled = true;
 
@@ -345,6 +468,20 @@
 
           player.addEventListener('error', event => {
             log('Player error: ' + JSON.stringify(event.detail));
+          });
+
+          const requestTypes = shaka.net.NetworkingEngine.RequestType;
+
+          player.getNetworkingEngine().registerRequestFilter((type, request) => {
+            if (type === requestTypes.LICENSE) {
+              applyHeaders(request, drmHeaders);
+            } else if (
+              type === requestTypes.MANIFEST ||
+              type === requestTypes.SEGMENT
+            ) {
+              // SEGMENT includes initialization and media segments.
+              applyHeaders(request, mpdHeaders);
+            }
           });
 
           player.configure({
@@ -363,6 +500,10 @@
           log(`Requested key system: ${keySystem}`);
           log(`Video robustness: ${videoRobustness || '(none)'}`);
           log(`Audio robustness: ${audioRobustness || '(none)'}`);
+
+          // Do not log header values.
+          log(`DRM headers configured: ${Object.keys(drmHeaders).length}`);
+          log(`MPD headers configured: ${Object.keys(mpdHeaders).length}`);
 
           await player.load(manifestUrl);
           log('Loaded successfully.');
@@ -393,6 +534,7 @@
       keySystemSelect.addEventListener('change', () => {
         updateRobustnessMenus();
 
+        // Exact literal, case-sensitive, first-occurrence replacement only.
         if (keySystemSelect.value === WIDEVINE) {
           licenseInput.value =
             licenseInput.value.replace('playready', 'widevine');
@@ -402,8 +544,16 @@
         }
       });
 
+      for (const input of [drmHeadersInput, mpdHeadersInput]) {
+        input.addEventListener('input', () => {
+          input.setCustomValidity('');
+        });
+      }
+
       loadButton.addEventListener('click', load);
-      shareButton.addEventListener('click', share);
+
+      // Preserve the existing Share behaviour: display and copy the URL.
+      shareButton.addEventListener('click', copyShareUrl);
 
       populateFormFromUrl();
 
