@@ -334,7 +334,7 @@
         const url = showShareUrl();
 
         try {
-          if (!navigator.clipboard?.writeText) {
+          if (!navigator.clipboard || !navigator.clipboard.writeText) {
             throw new Error('Clipboard unavailable');
           }
 
@@ -519,11 +519,21 @@
             }
           }
         } catch (error) {
+          var errorCode = error.message;
+          if (error.code !== undefined && error.code !== null) {
+            errorCode = error.code;
+          }
+
+          var errorData = [];
+          if (error.data !== undefined && error.data !== null) {
+            errorData = error.data;
+          }
+
           log(
             'Load failed: ' +
-            (error.code ?? error.message) +
+            errorCode +
             ' ' +
-            JSON.stringify(error.data ?? [])
+            JSON.stringify(errorData)
           );
         } finally {
           loading = false;
