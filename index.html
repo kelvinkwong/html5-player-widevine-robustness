@@ -244,8 +244,10 @@
       }
 
       function setOptions(select, options, defaultValue) {
-        select.replaceChildren();
-
+        while (select.firstChild) {
+          select.removeChild(select.firstChild);
+        }
+ 
         for (const [value, label] of options) {
           select.add(new Option(label, value));
         }
